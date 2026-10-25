@@ -81,7 +81,7 @@ metadata/clinical_GSE81089.csv.
 Note on Section 1: the counts file has 218 samples; the script keeps the 127
 listed in coldata.csv (108 LUAD + 19 normal).
 
-Note on TCGA data: [FILL: include luad_SE.rds, or give the download command here.]
+Note on TCGA data: [include luad_SE.rds, or give the download command here.]
 
 NOT INCLUDED
 ------------
@@ -90,4 +90,4 @@ NOT INCLUDED
  - Web tools (TIMER, UALCAN, cBioPortal, Human Protein Atlas): settings and
    access dates are in the Methods.
 
-Contact: [FILL: mpsingh16@allduniv.ac.in]
+Contact: [saba94ehsan@gmail.com]
