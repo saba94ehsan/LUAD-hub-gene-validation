@@ -3,20 +3,44 @@
 # Integrative Transcriptomic and Network-Based Identification of Cell-Cycle
 # Hub Genes in Lung Adenocarcinoma
 #
-#   SECTION 1  GSE81089: DESeq2, PCA, paired analysis, topGO, fgsea
+#   SECTION 1  GSE81089: DESeq2, PCA, paired analysis, topGO, fgsea;
+#              1.12 hub genes in matched pairs and by tumour cell % (Suppl. Table S8)
 #   SECTION 2  TCGA-LUAD: DESeq2 validation and comparison with GSE81089
-#   SECTION 3  TCGA-LUAD: survival (Kaplan-Meier, Cox, Schoenfeld), Tables 3 and 9
-#   SECTION 4  GSE81089: survival; Figures 6, 7 and 8 (forest plot)
+#   SECTION 3  TCGA-LUAD: survival (Kaplan-Meier, Cox, Schoenfeld), Tables 3 and 9;
+#              3.2 stage completed from the GDC clinical table (main model, 486 patients);
+#              3.6 sensitivity analysis, stage from the data object only (379 patients);
+#              3.7 included vs excluded patients (Suppl. Table S9);
+#              3.8 proliferation score and tumour purity (Suppl. Table S10)
+#   SECTION 4  GSE81089: survival; Figures 5, 6 and 7
+#   SECTION 5  cytoHubba: Fig. 4B (UpSet) and 4C (rank heatmap) from Suppl. Table S6
+#   SECTION 6  Human Protein Atlas: Suppl. Table S11 and Suppl. Fig. S5A
+#   (1.13: Fig. 1-3 and Suppl. Tables S1-S4)
 #
-# NOT included: STRING / Cytoscape (cytoHubba, MCODE) and the web tools
-# (TIMER, UALCAN, cBioPortal, Human Protein Atlas); see the Methods.
+# WHERE EACH FIGURE / TABLE OF THE MANUSCRIPT COMES FROM
+#   Table 3   3.2 (07_tables_for_manuscript/Table3_TCGA_clinical.csv)
+#   Table 8   2.5 (Table8_hubgenes_GEO_vs_TCGA.csv)
+#   Table 9   3.5 + 4.3 (Table9_TCGA_rows.csv, Table9_GSE81089_rows.csv)
+#   Fig. 5    4.5   Fig. 6    4.3   Fig. 7    4.4   (08_figures/Fig5_*, Fig6_*, Fig7_*)
+#   Suppl. Fig. S2  2.6   Suppl. Fig. S3  3.3
+#   Suppl. Table S1 1.2-1.8 (01_DESeq2/*.csv)   S2-S4 1.13
+#   Suppl. Table S4 1.7 (fgsea_all_sets.csv)    S7 2.4 (TCGA_DESeq2_annotated_ALL_genes.csv)
+#   Suppl. Table S8 1.12   S9 3.7   S10 3.8
+#   Fig. 4 and Suppl. Tables S5-S6 come from Cytoscape (see README.md, folder 03_PPI).
+#   Fig. 1-3  1.13   Fig. 4B/4C  Section 5   Suppl. Table S11 and Fig. S5A  Section 6
+#   Fig. 4A, Fig. 8-10 and the tissue cores of Suppl. Fig. S5B-E are not drawn by this
+#   script (Cytoscape, web tools; see README.md).
+#
+# NOT included: STRING / Cytoscape (network, MCODE, cytoHubba scores) and the web tools
+# (TIMER, UALCAN, cBioPortal); see the Methods.
 #
 # HOW TO RUN
-#   1. Set PROJ_DIR below to the folder that contains this script.
+#   1. Open R in the project folder (the folder that contains this script), e.g.
+#      setwd("path/to/project"), or write the path in PROJ_DIR below.
 #   2. Input files (relative to PROJ_DIR):
 #        GSE81089_readcounts_featurecounts.tsv.gz   (GEO, series GSE81089)
 #        metadata/coldata.csv                       (sample, condition, patient)
 #        04_TCGA/luad_SE.rds                        (TCGA-LUAD, GDC, SummarizedExperiment)
+#        metadata/Supplementary_Table_S6_cytoHubba.xlsx (Section 5), metadata/pathology.tsv (Section 6)
 #        01_DESeq2/vsd_main.rds, 01_DESeq2/res_sym_main.rds
 #                                                   (provided; see SECTION 1.11)
 #   3. Run the whole script:  Rscript LUAD_hub_gene_analysis.R
@@ -29,12 +53,17 @@
 ###############################################################################
 
 ## ---- 0: settings ----------------------------------------------------------
-PROJ_DIR      <- "~/LUAD_code"                 # <-- EDIT: folder with this script
+PROJ_DIR      <- getwd()                         # run the script from the project folder (setwd() first), or write the path here
 COUNTS_FILE   <- "GSE81089_readcounts_featurecounts.tsv.gz"
 COLDATA_FILE  <- "metadata/coldata.csv"
 CLINICAL_FILE <- "metadata/clinical_GSE81089.csv"
 TCGA_SE_FILE  <- "04_TCGA/luad_SE.rds"
 REBUILD_INTERMEDIATE <- FALSE   # TRUE = rebuild 01_DESeq2/*.rds from SECTION 1 (see 1.11)
+# Stage from the GDC clinical table (GDC Data Release 46.0, accessed 7 November 2026).
+# The file is provided so that the result does not depend on later GDC releases.
+# Columns used: patient12, stage_GDC. If the file is missing it is downloaded
+# with TCGAbiolinks (internet needed) and saved under this name.
+GDC_STAGE_FILE <- "metadata/TCGA_stage_GDC_release46.csv"
 PADJ_CUT <- 0.05
 LFC_CUT  <- 1
 
@@ -44,12 +73,28 @@ for (d in c("00_session", "01_DESeq2", "02_GO_GSEA", "03_PPI", "04_TCGA",
   dir.create(d, showWarnings = FALSE)
 stopifnot("counts file not found in PROJ_DIR" = file.exists(COUNTS_FILE),
           "metadata/coldata.csv not found"     = file.exists(COLDATA_FILE))
+# Pre-flight check: all other input files are tested here, so that a missing file
+# stops the script now and not after a long run.
+local({
+  need_files <- c("04_TCGA/luad_SE.rds",
+                  "metadata/clinical_GSE81089.csv",
+                  "metadata/TCGA_stage_GDC_release46.csv",
+                  "metadata/Supplementary_Table_S6_cytoHubba.xlsx",
+                  "metadata/pathology.tsv")
+  miss <- need_files[!file.exists(need_files)]
+  if (length(miss))
+    stop("Input file(s) missing in ", getwd(), ":\n  ", paste(miss, collapse = "\n  "),
+         call. = FALSE)
+  if (!requireNamespace("TCGAbiolinks", quietly = TRUE))
+    stop("Package TCGAbiolinks is needed for the tumour purity data (Section 3.8): ",
+         "BiocManager::install(\"TCGAbiolinks\")", call. = FALSE)
+})
 
 set.seed(42)                       # fixed seed (used again before fgsea)
 options(stringsAsFactors = FALSE)
 
 ## ---- 0.1: packages and versions ------------------------------------------
-need <- c("survival", "survminer", "ggplot2", "patchwork")
+need <- c("survival", "survminer", "ggplot2", "patchwork", "readxl", "writexl", "UpSetR")
 miss <- need[!vapply(need, requireNamespace, logical(1), quietly = TRUE)]
 if (length(miss)) install.packages(miss)
 suppressPackageStartupMessages({
@@ -183,8 +228,11 @@ nosym <- res[is.na(res$symbol) & !is.na(res$padj) & res$Direction != "NS", ]
 if (requireNamespace("biomaRt", quietly = TRUE)) tryCatch({
   mart <- biomaRt::useEnsembl("ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl",
                               host = "https://feb2014.archive.ensembl.org")
-  bm <- biomaRt::getBM(c("ensembl_gene_id", "external_gene_name", "gene_biotype"),
+  # the 2014 archive (Ensembl 73) calls this attribute "external_gene_id", newer releases "external_gene_name"
+  gname <- if ("external_gene_name" %in% biomaRt::listAttributes(mart)$name) "external_gene_name" else "external_gene_id"
+  bm <- biomaRt::getBM(c("ensembl_gene_id", gname, "gene_biotype"),
                        "ensembl_gene_id", nosym$ensembl, mart)
+  names(bm)[names(bm) == gname] <- "external_gene_name"
   bm2 <- merge(nosym, bm, by.x = "ensembl", by.y = "ensembl_gene_id")
   write.csv(bm2[order(bm2$padj), ],
             "01_DESeq2/DEGs_without_current_symbol_GRCh37_biotype.csv", row.names = FALSE)
@@ -194,7 +242,7 @@ if (requireNamespace("biomaRt", quietly = TRUE)) tryCatch({
   writeLines(unique(up_nosym$external_gene_name),
              "03_PPI/up_DEG_symbols_from_GRCh37_check.txt")
 }, error = function(e)
-  message("1.9 skipped (Ensembl archive not reachable): ", conditionMessage(e)))
+  message("1.8 skipped (Ensembl archive not reachable or attribute missing): ", conditionMessage(e)))
 
 ## ---- 1.9: PPI input (up-regulated DEGs, unique symbols) -------------------------
 writeLines(sort(unique(sig$symbol[sig$Direction == "Up"])), "03_PPI/up_DEG_symbols.txt")
@@ -266,6 +314,184 @@ if (REBUILD_INTERMEDIATE || !all(file.exists(INTERMEDIATE))) {
   cat("rebuilt:", dim(vsd_main), "|", nrow(res_sym_main), "genes\n")
 }
 
+## ---- 1.12: hub genes in matched pairs and by tumour cell % (Suppl. Table S8) ------
+# Matched-pair and tumour-cell-percentage analysis. Writes 07_tables_for_manuscript/TableS8_paired_and_TCpct_hubgenes.csv
+hub1 <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
+ens1 <- vapply(hub1, function(g) {
+  d <- res[which(res$symbol == g & !is.na(res$padj)), ]
+  d$ensembl[order(d$padj)][1]
+}, character(1))
+pick1 <- function(r, lab) {
+  r <- as.data.frame(r)[ens1, ]
+  data.frame(Analysis = lab, Gene = hub1, log2FC = r$log2FoldChange, SE = r$lfcSE,
+             p = r$pvalue, padj_BH = r$padj, row.names = NULL)
+}
+# (a) primary analysis, all 108 LUAD vs 19 normal (same result as 1.2)
+s8_main <- pick1(res, "Primary: 108 LUAD vs 19 normal")
+# (b) 9 matched pairs, design ~ patient + condition (dds_p from 1.5)
+s8_pair <- pick1(results(dds_p, contrast = c("condition", "LUAD", "Normal")),
+                 "Matched pairs (design ~ patient + condition)")
+# (c) tumour cell percentage: correlation within tumours, and high-TC% tumours vs normal
+cor_tc <- do.call(rbind, lapply(hub1, function(g) {
+  ct <- cor.test(assay(vsd)[ens1[g], tum], tc[tum], method = "spearman", exact = FALSE)
+  data.frame(Gene = g, Spearman_rho_expr_vs_TC = unname(ct$estimate), p_TC = ct$p.value)
+}))
+hi  <- rownames(cd)[tum & tc >= median(tc[tum])]
+sub_hi <- c(hi, rownames(cd)[cd$condition == "Normal"])
+dds_hi <- DESeq(DESeqDataSetFromMatrix(cnt[, sub_hi], droplevels(cd[sub_hi, ]),
+                                       design = ~ condition), quiet = TRUE)
+s8_hi <- pick1(results(dds_hi, contrast = c("condition", "LUAD", "Normal")),
+               paste0("High-TC% tumours (>= median, n = ", length(hi), ") vs normal"))
+s8 <- merge(rbind(s8_main, s8_pair, s8_hi), cor_tc, by = "Gene", all.x = TRUE)
+print(s8, digits = 3)
+write.csv(s8, "07_tables_for_manuscript/TableS8_paired_and_TCpct_hubgenes.csv", row.names = FALSE)
+cat("tumours with TC%:", sum(tum), "| median TC%:", median(tc[tum]),
+    "| high-TC% tumours:", length(hi), "\n")
+# CHECK: 9 matched pairs; 107 tumours with TC% (median 30); 72 high-TC% tumours.
+#        The Primary rows must equal the DESeq2 result of 1.2 (CCNB1 2.30, CCNA2 2.04,
+#        CDK1 1.81, BRCA1 1.06). This is the source of Supplementary Table S8.
+
+
+## ---- 1.13: figures 1-3 and the supplementary tables S1-S4 of GSE81089 ---------------
+# Fig. 1 (PCA, volcano, MA plot), Fig. 2 (GO), Fig. 3 (GSEA) and Suppl. Tables S1-S4.
+# The plots show the results of 1.2-1.7; the final layout of the journal figures
+# (font, panel arrangement) was adjusted afterwards, the data in them are these.
+FONT <- "serif"
+th   <- theme_bw(base_size = 12, base_family = FONT) +
+  theme(panel.grid = element_blank(), plot.title = element_text(face = "bold"))
+hub13 <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
+
+# Fig. 1A  PCA  (colours as in the manuscript figure: Normal = coral, LUAD = teal)
+COL_DIR <- c(Up = "#CD4944", Down = "#3F68A8", NS = "grey75")   # volcano / MA, as in Fig. 1
+pdf1 <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], Group = cd$condition)
+p1a <- ggplot(pdf1, aes(PC1, PC2, colour = Group)) + geom_point(size = 1.8, alpha = 0.9) +
+  scale_colour_manual(values = c(Normal = "#F8766D", LUAD = "#00BFC4")) +
+  labs(title = "GSE81089: 108 LUAD tumours vs 19 normal lung",
+       x = paste0("PC1: ", pc_var[1], "% variance"), y = paste0("PC2: ", pc_var[2], "% variance"),
+       colour = "Condition", tag = "A") + th
+# Fig. 1B  volcano (hub genes highlighted in dark red)
+vd <- withsym
+vd$sig <- vd$Direction
+vd$nlp <- -log10(pmax(vd$padj, 1e-300))
+p1b <- ggplot(vd, aes(log2FoldChange, nlp, colour = sig)) + geom_point(size = 0.6, alpha = 0.7) +
+  scale_colour_manual(values = COL_DIR) +
+  geom_vline(xintercept = c(-LFC_CUT, LFC_CUT), linetype = 2) +
+  geom_hline(yintercept = -log10(PADJ_CUT), linetype = 2) +
+  geom_point(data = vd[vd$symbol %in% hub13, ], colour = "#8B1A1A", size = 1.8) +
+  geom_text(data = vd[vd$symbol %in% hub13, ], aes(label = symbol), colour = "#8B1A1A",
+            size = 3, fontface = "bold", hjust = -0.2, vjust = -0.4, show.legend = FALSE) +
+  coord_cartesian(xlim = c(-8, 12)) +      # TINAG (log2FC 23) is off-scale
+  labs(x = "log2 fold change (LUAD vs normal)", y = "-log10 adjusted p", colour = "Direction", tag = "B") + th
+# Fig. 1C  MA plot (log10 mean expression)
+p1c <- ggplot(vd, aes(baseMean, log2FoldChange, colour = sig)) + geom_point(size = 0.6, alpha = 0.7) +
+  scale_x_log10() + scale_colour_manual(values = COL_DIR) +
+  geom_hline(yintercept = c(-LFC_CUT, 0, LFC_CUT), linetype = 2) +
+  coord_cartesian(ylim = c(-8, 12)) +
+  labs(x = "Mean of normalised counts (log10)", y = "log2 fold change (LUAD vs normal)",
+       colour = "Direction", tag = "C") + th
+fig1 <- (p1a | p1b) / (p1c | patchwork::plot_spacer())
+ggsave("08_figures/Fig1_GSE81089_overview.png", fig1, width = 11, height = 9, dpi = 300)
+ggsave("08_figures/Fig1_GSE81089_overview.pdf", fig1, width = 11, height = 9)
+
+# Fig. 2  GO: top 10 terms per ontology by raw p (colours and layout as in the manuscript)
+top_go <- do.call(rbind, lapply(c("BP", "MF", "CC"), function(o) {
+  d <- go_all[go_all$ontology == o, ]; d <- d[order(d$raw_p), ][1:10, ]; d
+}))
+th2 <- theme_classic(base_size = 11, base_family = FONT) +
+  theme(axis.text = element_text(face = "bold"), plot.title = element_text(face = "bold"),
+        plot.tag = element_text(face = "bold", size = 16))
+mk_go <- function(o, lab, col, tg) {
+  d <- top_go[top_go$ontology == o, ]
+  d$Term <- factor(d$Term, levels = rev(d$Term)); d$nlp <- -log10(d$raw_p)
+  ggplot(d, aes(nlp, Term)) + geom_col(fill = col, width = 0.75) +
+    scale_y_discrete(labels = scales::label_wrap(32)) +
+    labs(title = lab, x = expression(-log[10](raw~p)), y = NULL, tag = tg) + th2
+}
+fig2 <- (mk_go("BP", "Biological Process", "#2A5D9F", "A") | mk_go("MF", "Molecular Function", "#1A7F79", "B")) /
+        (mk_go("CC", "Cellular Component", "#7A4EA3", "C") | patchwork::plot_spacer())
+ggsave("08_figures/Fig2_GO_top10.png", fig2, width = 12, height = 10, dpi = 300)
+ggsave("08_figures/Fig2_GO_top10.pdf", fig2, width = 12, height = 10)
+
+# Fig. 3  GSEA bubble plots: 10 most significant activated and 10 most significant
+# suppressed gene sets per database (adjusted p < 0.05); size = gene-set size,
+# colour = -log10 adjusted p (light blue -> dark blue, as in the manuscript figure)
+mk_gsea <- function(db, tg) {
+  d <- gs[gs$database == db, ]
+  d <- rbind(head(d[d$NES > 0, ][order(d$padj[d$NES > 0]), ], 10),
+             head(d[d$NES < 0, ][order(d$padj[d$NES < 0]), ], 10))
+  d$lab <- gsub("_", " ", sub("^(HALLMARK|KEGG|REACTOME)_", "", d$pathway))
+  d$lab <- factor(d$lab, levels = d$lab[order(d$NES)])        # highest NES at the top
+  d$nlp <- -log10(d$padj)
+  ggplot(d, aes(NES, lab, size = size, colour = nlp)) +
+    geom_vline(xintercept = 0, linetype = 2) + geom_point() +
+    scale_colour_gradient(low = "#93BFDC", high = "#12376C",
+                          name = expression(-log[10]~adj.~p)) +
+    scale_size_continuous(name = "Gene-set size", range = c(1.5, 5)) +
+    scale_y_discrete(labels = scales::label_wrap(30)) +
+    labs(title = db, x = "Normalised enrichment score (NES)", y = NULL, tag = tg) +
+    theme_bw(base_size = 10, base_family = FONT) +
+    theme(axis.text = element_text(face = "bold"), axis.title = element_text(face = "bold"),
+          plot.title = element_text(face = "bold"), plot.tag = element_text(face = "bold", size = 16),
+          panel.grid.minor = element_blank())
+}
+fig3 <- (mk_gsea("Hallmark", "A") | mk_gsea("KEGG", "B")) / mk_gsea("Reactome", "C")
+ggsave("08_figures/Fig3_GSEA_bubble.png", fig3, width = 12, height = 13, dpi = 300)
+ggsave("08_figures/Fig3_GSEA_bubble.pdf", fig3, width = 12, height = 13)
+
+# Suppl. Table S1: annotated DESeq2 results (5 sheets)
+res_shr <- as.data.frame(lfcShrink(dds, coef = "condition_LUAD_vs_Normal", type = "apeglm"))
+nc13 <- counts(dds, normalized = TRUE); cond13 <- colData(dds)$condition
+s1 <- data.frame(Ensembl = res$ensembl, baseMean = res$baseMean, log2FC = res$log2FoldChange,
+                 lfcSE = res$lfcSE, stat = res$stat, pvalue = res$pvalue, padj = res$padj,
+                 log2FC_shrunk = res_shr[res$ensembl, "log2FoldChange"], SYMBOL = res$symbol)
+for (cc in c("GENENAME", "ENTREZID", "GENETYPE"))
+  s1[[cc]] <- mapIds(org.Hs.eg.db, keys = s1$Ensembl, column = cc, keytype = "ENSEMBL", multiVals = "first")
+s1$mean_norm_Tumor  <- rowMeans(nc13[s1$Ensembl, cond13 == "LUAD"])
+s1$mean_norm_Normal <- rowMeans(nc13[s1$Ensembl, cond13 == "Normal"])
+s1$Tumor_frac  <- rowMeans(nc13[s1$Ensembl, cond13 == "LUAD"]   >= 10)
+s1$Normal_frac <- rowMeans(nc13[s1$Ensembl, cond13 == "Normal"] >= 10)
+s1$Has_SYMBOL  <- !is.na(s1$SYMBOL)
+s1$Significant <- !is.na(s1$padj) & s1$padj < PADJ_CUT & abs(s1$log2FC) > LFC_CUT
+s1$Direction   <- ifelse(s1$Significant & s1$log2FC > 0, "Up",
+                         ifelse(s1$Significant & s1$log2FC < 0, "Down", "NS"))
+s1$Reliable <- (s1$Direction == "Up" & s1$Tumor_frac >= 0.5) | (s1$Direction == "Down" & s1$Normal_frac >= 0.5)
+s1 <- s1[order(s1$padj), ]
+if (exists("bm2")) {
+  s1_nosym <- bm2[order(bm2$padj), c("ensembl", "external_gene_name", "gene_biotype",
+                                     "baseMean", "log2FoldChange", "padj", "Direction")]
+  names(s1_nosym)[1:2] <- c("ensembl_gene_id", "external_gene_name")
+} else s1_nosym <- data.frame()
+if (requireNamespace("writexl", quietly = TRUE))
+  writexl::write_xlsx(list(Annotated_all_genes = s1,
+                           Annotated_with_symbol = s1[s1$Has_SYMBOL, ],
+                           DEG_UP = s1[s1$Has_SYMBOL & s1$Direction == "Up", ],
+                           DEG_DOWN = s1[s1$Has_SYMBOL & s1$Direction == "Down", ],
+                           DEGs_without_current_symbol_GRC = s1_nosym),
+                      "07_tables_for_manuscript/Supplementary_Table_S1_LUAD_DESeq2_annotated_ALL.xlsx")
+
+# Suppl. Table S2: paired analysis, all tested genes (9 patients, design ~ patient + condition)
+rp_all <- as.data.frame(results(dds_p, contrast = c("condition", "LUAD", "Normal"), alpha = PADJ_CUT))
+s2 <- data.frame(Ensembl = rownames(rp_all), baseMean = rp_all$baseMean, log2FC = rp_all$log2FoldChange,
+                 lfcSE = rp_all$lfcSE, pvalue = rp_all$pvalue, padj = rp_all$padj,
+                 SYMBOL = mapIds(org.Hs.eg.db, keys = rownames(rp_all), keytype = "ENSEMBL",
+                                 column = "SYMBOL", multiVals = "first"))
+s2$Significant <- !is.na(s2$padj) & s2$padj < PADJ_CUT & abs(s2$log2FC) > LFC_CUT
+s2$Direction   <- ifelse(s2$Significant & s2$log2FC > 0, "Up", ifelse(s2$Significant & s2$log2FC < 0, "Down", "NS"))
+s2 <- s2[order(s2$padj), ]
+write.csv(s2, "07_tables_for_manuscript/Supplementary_Table_S2_LUAD_DESeq2_PAIRED_annotated_ALL_genes.csv", row.names = FALSE)
+
+# Suppl. Tables S3 (GO) and S4 (GSEA) in the layout of the supplementary files
+s3 <- go_all[, c("GO.ID", "Term", "Annotated", "Significant", "Expected", "raw_p", "BH_p", "ontology")]
+names(s3) <- c("GO.ID", "Term", "Annotated", "Significant", "Expected", "raw.p", "BH", "Ontology")
+write.csv(s3, "07_tables_for_manuscript/Supplementary_Table_S3_GO_ALL_ontologies_ALL_terms.csv", row.names = FALSE)
+s4 <- gsea[, c("pathway", "pval", "padj", "log2err", "ES", "NES", "size", "leadingEdge", "database")]
+names(s4)[9] <- "Database"
+write.csv(s4, "07_tables_for_manuscript/Supplementary_Table_S4_GSEA_ALL_databases_ALL_pathways.csv", row.names = FALSE)
+# CHECK: S1 sheets have 26,184 / 20,201 / 3,089 / 1,751 / 1,534 rows; S2 has 26,184 rows
+#        (5,687 with Significant = TRUE, 4,535 of them with a symbol); S3 has 8,128 terms;
+#        S4 has 1,374 pathways (344 with padj < 0.05).
+
+
 
 ## =============================================================================
 ## SECTION 2  TCGA-LUAD: DESeq2 validation and comparison with GSE81089
@@ -275,7 +501,7 @@ getwd()
 if (.Platform$OS.type == "unix") system("free -h")
 stopifnot("TCGA file not found: 04_TCGA/luad_SE.rds" = file.exists(TCGA_SE_FILE))
 list.files("04_TCGA")
-# CHECK: getwd() should show .../Desktop/LUAD_project.
+# CHECK: getwd() should show your PROJ_DIR (the folder that contains this script).
 #        Total memory should be 8 GB or more.
 #        luad_SE.rds should be listed in 04_TCGA.
 
@@ -483,8 +709,8 @@ p <- ggplot(mm, aes(log2FC_GEO, log2FC_TCGA)) +
   geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
   coord_cartesian(xlim = c(-8, 12), ylim = c(-8, 12)) + theme_bw() +
   labs(x = "log2 fold change, GSE81089 (LUAD vs normal)",
-       y = "log2 fold change, TCGA-LUAD (tumor vs normal)")
-ggsave("08_figures/FigS_GEO_vs_TCGA_log2FC.png", p, width = 6, height = 6, dpi = 300)
+       y = "log2 fold change, TCGA-LUAD (tumour vs normal)")
+ggsave("08_figures/FigS2_GEO_vs_TCGA_log2FC.png", p, width = 6, height = 6, dpi = 300)
 # CHECK: the counts and the correlation are printed. This is descriptive only;
 #        report what you obtain (there is no target value).
 #        The plot should be written to 08_figures.
@@ -533,6 +759,11 @@ setdiff(needcols, names(clin))
 intersect(c("sex_at_birth", "gender"), names(clin))
 
 hub <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
+plot_order <- c("CDK1", "CCNA2", "CCNB1", "BRCA1")   # panel order of the Kaplan-Meier figures (A-D)
+panel_letter <- c(CDK1 = "A", CCNA2 = "B", CCNB1 = "C", BRCA1 = "D")
+# arrange_ggsurvplots() fills the 2 x 2 grid column by column, so the list is handed over
+# as CDK1, CCNB1, CCNA2, BRCA1 to get A CDK1, B CCNA2 (top row) and C CCNB1, D BRCA1 (bottom row)
+grid_order <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
 ens <- vapply(hub, function(g) {
   d <- rs[which(rs$SYMBOL == g), ]
   d$Ensembl[order(d$padj)][1]          # same as pick() in Section 2
@@ -571,8 +802,24 @@ sexcol       <- intersect(c("sex_at_birth", "gender"), names(tum))[1]
 tum$sex      <- factor(tolower(tum[[sexcol]]), levels = c("female", "male"))
 tum$age      <- as.numeric(tum$age_at_index)
 ps           <- parse_stage(tum$ajcc_pathologic_stage)
+tum$stage4_colData <- ps$stage4        # stage as stored in the downloaded data object
+tum$stage_colData  <- ps$stage
 tum$stage4   <- ps$stage4
 tum$stage    <- ps$stage
+
+# Stage missing in the data object is completed from the GDC clinical table
+# (main model). Stage already present is never overwritten.
+if (file.exists(GDC_STAGE_FILE)) {
+  gdc <- read.csv(GDC_STAGE_FILE, stringsAsFactors = FALSE)          # patient12, stage_GDC
+} else {
+  gcl <- TCGAbiolinks::GDCquery_clinic(project = "TCGA-LUAD", type = "clinical")
+  gdc <- data.frame(patient12 = gcl$submitter_id, stage_GDC = gcl$ajcc_pathologic_stage)
+  write.csv(gdc, GDC_STAGE_FILE, row.names = FALSE)
+}
+pf_gdc    <- parse_stage(gdc$stage_GDC[match(tum$patient12, gdc$patient12)])
+fill_stage <- is.na(tum$stage4)
+tum$stage4[fill_stage] <- pf_gdc$stage4[fill_stage]
+tum$stage[fill_stage]  <- pf_gdc$stage[fill_stage]
 
 cat("Tumor patients (RNA-seq)  :", nrow(tum), "\n")
 cat("Survival time missing     :", sum(is.na(tum$time_day)), "\n")
@@ -584,6 +831,22 @@ cat("Complete age+sex+stage    :",
     sum(sv$event[complete.cases(sv[, c("age", "sex", "stage")])]), "\n")
 
 for (g in hub) sv[[g]] <- as.numeric(expr[g, sv$barcode])
+
+# numbers used in the manuscript (Methods, Table 3, Table 9)
+cc_main <- complete.cases(sv[, c("age", "sex", "stage")])             # stage completed from GDC
+cc_obj  <- complete.cases(sv[, c("age", "sex", "stage_colData")])     # data object only
+if (!exists("chk"))      # defined in 1.10; repeated here so that Section 3 can be run alone
+  chk <- function(what, got, ref) data.frame(item = what, got = got, verified = ref,
+                                             status = ifelse(isTRUE(all.equal(got, ref)), "OK", "DIFFERENT"))
+ck_tcga <- rbind(
+  chk("TCGA survival cohort", nrow(sv), 504),
+  chk("  deaths", sum(sv$event), 182),
+  chk("complete age+sex+stage (stage completed from GDC)", sum(cc_main), 486),
+  chk("  deaths", sum(sv$event[cc_main]), 177),
+  chk("complete age+sex+stage (data object only)", sum(cc_obj), 379),
+  chk("  deaths", sum(sv$event[cc_obj]), 123))
+write.csv(ck_tcga, "00_session/reference_check_TCGA.csv", row.names = FALSE)
+print(ck_tcga, row.names = FALSE)
 
 # median follow-up: reverse Kaplan-Meier
 rk <- survfit(Surv(time_y, 1 - event) ~ 1, data = sv)
@@ -616,16 +879,16 @@ write.csv(tab3, "07_tables_for_manuscript/Table3_TCGA_clinical.csv", row.names =
 write.csv(sv[, c("barcode", "patient12", "time_day", "time_y", "event", "age", "sex",
                  "stage4", "stage", hub)],
           "05_survival/TCGA_survival_input.csv", row.names = FALSE)
-# CHECK: compare these counts with Table 3 of the manuscript.
-#        NOTE: stage may be missing for many patients
-#        (ajcc_pathologic_stage is incomplete in colData). Take the stage
-#        line of Table 3 from this output.
+# CHECK: compare these counts with Table 3 of the manuscript and look at
+#        00_session/reference_check_TCGA.csv (all rows should say OK).
+#        Stage was missing for 120 of 504 patients in the data object; 112 were
+#        found in the GDC table (8 remain missing), so 486 patients are complete.
 
 
-## ---- 3.3: Kaplan-Meier + log-rank (Supplementary Fig S2) -------------------
+## ---- 3.3: Kaplan-Meier + log-rank (Supplementary Fig S3) -------------------
 km_list <- list()
 lr <- data.frame()
-for (g in hub) {
+for (g in plot_order) {
   d <- sv
   d$grp <- factor(ifelse(d[[g]] > median(d[[g]]), "High", "Low"),
                   levels = c("Low", "High"))
@@ -641,15 +904,17 @@ for (g in hub) {
     pval = paste0("Log-rank p = ", signif(p, 2)), pval.size = 4,
     palette = c("#0072B2", "#D55E00"), legend.labs = c("Low", "High"),
     legend.title = g, xlab = "Time (years)", ylab = "Overall survival probability",
-    title = paste0(g, " (n = ", nrow(d), ")"), break.time.by = 2,
+    title = paste0(panel_letter[[g]], "  ", g, " (n = ", nrow(d), ")"), break.time.by = 2,
     risk.table.height = 0.25, ggtheme = theme_bw())
 }
+lr <- lr[match(hub, lr$Gene), ]          # table order = hub order; figure order = plot_order
 print(lr)
 write.csv(lr, "05_survival/TCGA_logrank.csv", row.names = FALSE)
-pp <- arrange_ggsurvplots(unname(km_list), print = FALSE, ncol = 2, nrow = 2)
-ggsave("08_figures/FigS2_TCGA_KM_hubgenes.png", pp, width = 12, height = 11, dpi = 300)
-ggsave("08_figures/FigS2_TCGA_KM_hubgenes.pdf", pp, width = 12, height = 11)
+pp <- arrange_ggsurvplots(unname(km_list[grid_order]), print = FALSE, ncol = 2, nrow = 2)
+ggsave("08_figures/FigS3_TCGA_KM_hubgenes.png", pp, width = 12, height = 11, dpi = 300)
+ggsave("08_figures/FigS3_TCGA_KM_hubgenes.pdf", pp, width = 12, height = 11)
 # CHECK: 4 rows (CDK1, CCNB1, CCNA2, BRCA1); n_low + n_high = survival cohort.
+#        Panels A-D of the figure follow plot_order (CDK1, CCNA2, CCNB1, BRCA1).
 #        The plot should be in 08_figures. Open the figure and check
 #        that curves, numbers at risk and the p-value are shown.
 
@@ -682,8 +947,8 @@ cox_all <- do.call(rbind, lapply(hub, function(g)
   rbind(run_cox(sv, g, FALSE), run_cox(sv, g, TRUE))))
 print(cox_all, digits = 3)
 write.csv(cox_all, "05_survival/TCGA_cox_results.csv", row.names = FALSE)
-# CHECK: 8 rows (4 gene x 2 model). Univariable N = survival cohort,
-#        Adjusted N = complete-case count (should match Part 2).
+# CHECK: 8 rows (4 gene x 2 model). Univariable N = survival cohort (504),
+#        Adjusted N = 486 (stage completed from GDC, see 3.2).
 
 
 ## ---- 3.5: TCGA rows of Table 9 ---------------------------------------------
@@ -695,49 +960,157 @@ adj <- cox_all[cox_all$Model == "Adjusted", ]
 stopifnot(identical(uni$Gene, hub), identical(adj$Gene, hub), identical(lr$Gene, hub))
 t9 <- data.frame(
   Gene = hub, Cohort = "TCGA-LUAD",
-  `Patients / events` = paste(uni$N, "/", uni$Events),
+  `Patients / events (univariable; multivariable)` =
+    paste0(uni$N, " / ", uni$Events, "; ", adj$N, " / ", adj$Events),
   `Log-rank p (median split)` = formatC(lr$logrank_p, digits = 2, format = "g", flag = "#"),
   `Univariable HR (95% CI)` = fmt_hr(uni$HR, uni$LCL, uni$UCL),
   `Univariable p` = fmt_p(uni$p),
-  `Adjusted HR* (95% CI)` = fmt_hr(adj$HR, adj$LCL, adj$UCL),
-  `Adjusted p` = fmt_p(adj$p),
-  `Adjusted N / events` = paste(adj$N, "/", adj$Events),
-  `PH assumption (Schoenfeld p, gene term, adjusted model)` = formatC(adj$PH_p_gene, digits = 2, format = "f"),
+  `Multivariable HR (95% CI)` = fmt_hr(adj$HR, adj$LCL, adj$UCL),
+  `P value from the multivariable model` = fmt_p(adj$p),
+  `PH assumption (Schoenfeld p)` = formatC(adj$PH_p_gene, digits = 2, format = "f"),
   check.names = FALSE)
 print(t9, right = FALSE)
 write.csv(t9, "07_tables_for_manuscript/Table9_TCGA_rows.csv", row.names = FALSE)
-# CHECK: 4 rows. These are the TCGA rows of Table 9; the Results paragraph
+# CHECK: 4 rows. These are the TCGA rows of Table 9 (504 / 182; 486 / 177); the
+#        multivariable models include age, sex and stage; "P value from the
+#        multivariable model" is NOT corrected for multiple testing. The Results paragraph
 #        uses these numbers. The GSE81089 rows are produced in Section 4.
 #        PH column: use the same model (univariable or adjusted) as in the
 #        GSE table. Both PH p-values are saved in cox_all.
 
 
-## ---- 3.6: (OPTIONAL) sensitivity analysis with stage filled from GDC -------
-# Stage is missing for many patients in colData, so the complete-case adjusted
-# model is smaller. This part fills stage from the GDC clinical
-# table and re-runs the adjusted model.
-# This is a SENSITIVITY analysis only; it does not replace the main result.
-# Requires internet and TCGAbiolinks. Default FALSE.
-FILL_STAGE_FROM_GDC <- FALSE
-if (FILL_STAGE_FROM_GDC) {
-  gc <- TCGAbiolinks::GDCquery_clinic(project = "TCGA-LUAD", type = "clinical")
-  print(intersect(c("submitter_id", "ajcc_pathologic_stage"), names(gc)))
-  stg <- gc$ajcc_pathologic_stage[match(sv$patient12, gc$submitter_id)]
-  pf  <- parse_stage(stg)
-  sv2 <- sv
-  fill <- is.na(sv2$stage4)
-  sv2$stage4[fill] <- pf$stage4[fill]
-  sv2$stage[fill]  <- pf$stage[fill]
-  cat("Stage missing before:", sum(fill), " after:", sum(is.na(sv2$stage)), "\n")
-  cox_fill <- do.call(rbind, lapply(hub, function(g) run_cox(sv2, g, TRUE)))
-  print(cox_fill, digits = 3)
-  write.csv(cox_fill, "05_survival/TCGA_cox_adjusted_stage_filled_GDC.csv", row.names = FALSE)
-}
+## ---- 3.6: SENSITIVITY: stage taken from the data object only (379 patients) --
+# Same model as the main analysis, but patients whose stage is missing in the
+# downloaded data object are excluded (complete-case analysis without the GDC table).
+sv_obj <- sv
+sv_obj$stage <- sv_obj$stage_colData
+cox_obj <- do.call(rbind, lapply(hub, function(g) run_cox(sv_obj, g, TRUE)))
+print(cox_obj, digits = 3)
+write.csv(cox_obj, "05_survival/TCGA_cox_adjusted_colData_stage_only_379.csv", row.names = FALSE)
+# CHECK: N = 379, 123 events; HR 1.29, 1.32, 1.37, 1.06 (CDK1, CCNB1, CCNA2, BRCA1).
 
+
+## ---- 3.7: included vs excluded patients and GDC stage completion (Suppl. Table S9)
+# Included vs excluded patients. "Included" = complete age, sex and stage in the data
+# object (379 patients); "excluded" = any of them missing (125 patients).
+inc <- cc_obj
+tab_s9 <- data.frame(
+  Characteristic = c("Patients (n)", "Deaths, n (%)", "Median age, years", "Male, n (%)",
+                     "Median observed follow-up, years"),
+  Included = c(sum(inc),
+               sprintf("%d (%.0f%%)", sum(sv$event[inc]), 100 * mean(sv$event[inc])),
+               median(sv$age[inc], na.rm = TRUE),
+               sprintf("%d (%.0f%%)", sum(sv$sex[inc] == "male", na.rm = TRUE),
+                       100 * mean(sv$sex[inc] == "male", na.rm = TRUE)),
+               round(median(sv$time_y[inc]), 2)),
+  Excluded = c(sum(!inc),
+               sprintf("%d (%.0f%%)", sum(sv$event[!inc]), 100 * mean(sv$event[!inc])),
+               median(sv$age[!inc], na.rm = TRUE),
+               sprintf("%d (%.0f%%)", sum(sv$sex[!inc] == "male", na.rm = TRUE),
+                       100 * mean(sv$sex[!inc] == "male", na.rm = TRUE)),
+               round(median(sv$time_y[!inc]), 2)),
+  p = c(NA,
+        signif(chisq.test(table(inc, sv$event))$p.value, 2),
+        signif(wilcox.test(age ~ inc, data = sv)$p.value, 2),
+        signif(chisq.test(table(inc, sv$sex))$p.value, 2),
+        signif(wilcox.test(time_y ~ inc, data = sv)$p.value, 2)))
+print(tab_s9)
+write.csv(tab_s9, "07_tables_for_manuscript/TableS9_included_vs_excluded.csv", row.names = FALSE)
+
+pf_both <- parse_stage(gdc$stage_GDC[match(sv$patient12, gdc$patient12)])
+gdc_tab <- data.frame(
+  Item = c("Stage missing in the downloaded data object",
+           "Stage found in the GDC clinical table for these patients",
+           "Stage still missing after completion",
+           "Age missing (unchanged)",
+           "Patients with complete age, sex and stage after completion",
+           "Patients with stage in both sources",
+           "  of these, same stage group (I, II, III, IV) in both sources"),
+  n = c(sum(is.na(sv$stage4_colData)),
+        sum(is.na(sv$stage4_colData) & !is.na(sv$stage4)),
+        sum(is.na(sv$stage4)),
+        sum(is.na(sv$age)),
+        sum(cc_main),
+        sum(!is.na(sv$stage4_colData) & !is.na(pf_both$stage4)),
+        sum(!is.na(sv$stage4_colData) & !is.na(pf_both$stage4) &
+              sv$stage4_colData == pf_both$stage4, na.rm = TRUE)))
+print(gdc_tab)
+write.csv(gdc_tab, "07_tables_for_manuscript/TableS9_GDC_stage_completion.csv", row.names = FALSE)
+write.csv(sv[, c("barcode", "patient12", "event", "time_y", "age", "sex",
+                 "stage4_colData", "stage4", "stage")],
+          "05_survival/TCGA_survival_cohort_with_stage_source.csv", row.names = FALSE)
+# CHECK: 379 included / 125 excluded; deaths 123 (32%) vs 59 (47%), p = 0.004;
+#        GDC block: 120 / 112 / 8 / 10 / 486 / 384 / 382.
+#        The last csv is the patient list (sample inclusion list) of the survival analyses.
+
+
+## ---- 3.8: proliferation score and tumour purity (Suppl. Table S10) ------------
+# Proliferation score, tumour purity and incremental value. Needs the MSigDB (msigdbr) and, for purity, TCGAbiolinks
+# (Tumor.purity: consensus purity estimate CPE, Aran et al. 2015, Nat Commun 6:8971).
+# Proliferation score: Hallmark E2F targets + G2M checkpoint genes, the four hub genes
+# removed, mean of the per-gene z-scored VST expression, standardised (per 1 SD).
+h_sets <- tryCatch(msigdbr(species = "Homo sapiens", collection = "H"),
+                   error = function(e) msigdbr(species = "Homo sapiens", category = "H"))
+pg   <- setdiff(unique(h_sets$gene_symbol[h_sets$gs_name %in%
+                         c("HALLMARK_E2F_TARGETS", "HALLMARK_G2M_CHECKPOINT")]), hub)
+ids  <- unique(rs$Ensembl[rs$SYMBOL %in% pg & rs$Ensembl %in% rownames(vsd)])
+cat("Genes in the proliferation score:", length(ids), "(323 in the manuscript)\n")
+mm_p <- assay(vsd)[ids, sv$barcode]
+sv$prolif_z <- as.numeric(scale(colMeans(t(scale(t(mm_p))))))
+
+data(Tumor.purity, package = "TCGAbiolinks")
+tp    <- Tumor.purity[Tumor.purity$Cancer.type == "LUAD", ]
+tonum <- function(x) as.numeric(gsub(",", ".", as.character(x)))     # decimal commas
+key16 <- sum(substr(sv$barcode, 1, 16) %in% tp$Sample.ID)
+key15 <- sum(substr(sv$barcode, 1, 15) %in% tp$Sample.ID)
+klen  <- if (key16 >= key15) 16 else 15
+sv$purity <- tonum(tp$CPE[match(substr(sv$barcode, 1, klen), tp$Sample.ID)])
+cat("CPE purity available for", sum(!is.na(sv$purity)), "of", nrow(sv), "patients\n")
+
+d0 <- sv[complete.cases(sv[, c("time_y", "event", "age", "sex", "stage")]), ]   # 486
+dp <- d0[!is.na(d0$purity), ]                                                    # purity subset
+getz <- function(mod, lab, g) {
+  co <- summary(mod)$coefficients["z", ]; ci <- exp(confint(mod)["z", ])
+  data.frame(Gene = g, Model = lab, N = mod$n, Events = mod$nevent,
+             HR = unname(exp(co["coef"])), LCL = ci[1], UCL = ci[2],
+             p = unname(co["Pr(>|z|)"]), row.names = NULL)
+}
+rows <- list(); inc_val <- list()
+for (g in hub) {
+  d <- d0; d$z <- d[[paste0(g, "_z")]]
+  q <- dp; q$z <- q[[paste0(g, "_z")]]
+  mA <- coxph(Surv(time_y, event) ~ z + age + sex + stage, data = d)
+  m0 <- coxph(Surv(time_y, event) ~ age + sex + stage, data = d)
+  rows[[length(rows) + 1]] <- getz(mA, "A: gene + age + sex + stage", g)
+  rows[[length(rows) + 1]] <- getz(coxph(Surv(time_y, event) ~ z + prolif_z + age + sex + stage, data = d),
+                                   "B: A + proliferation score", g)
+  rows[[length(rows) + 1]] <- getz(coxph(Surv(time_y, event) ~ z + age + sex + stage, data = q),
+                                   "A in the purity subset", g)
+  rows[[length(rows) + 1]] <- getz(coxph(Surv(time_y, event) ~ z + purity + age + sex + stage, data = q),
+                                   "D: A + tumour purity (purity subset)", g)
+  rows[[length(rows) + 1]] <- getz(coxph(Surv(time_y, event) ~ z + prolif_z + purity + age + sex + stage, data = q),
+                                   "C: A + proliferation score + purity (purity subset)", g)
+  inc_val[[g]] <- data.frame(Gene = g,
+    Spearman_rho_with_proliferation_score = cor(d$z, d$prolif_z, method = "spearman"),
+    LR_test_p_gene_added = anova(m0, mA)$`Pr(>|Chi|)`[2],
+    C_index_age_sex_stage = unname(concordance(m0)$concordance),
+    C_index_with_gene = unname(concordance(mA)$concordance))
+}
+s10 <- do.call(rbind, rows); print(s10, digits = 3)
+s10b <- do.call(rbind, inc_val); print(s10b, digits = 3)
+mP <- coxph(Surv(time_y, event) ~ prolif_z + age + sex + stage, data = d0)
+cat("Proliferation score alone: HR per SD =", round(exp(coef(mP)["prolif_z"]), 2), "\n")
+cat("Spearman purity vs proliferation score:",
+    round(cor(dp$purity, dp$prolif_z, method = "spearman"), 2), "\n")
+write.csv(s10,  "05_survival/TableS10_cox_proliferation_purity.csv", row.names = FALSE)
+write.csv(s10b, "05_survival/TableS10_incremental_value.csv", row.names = FALSE)
+# CHECK: 486 patients / 177 events (485 with purity); score from 323 genes; rho with the
+#        score 0.85-0.91; proliferation score alone HR 1.29 per SD. Collinearity makes the
+#        estimates of models B and C imprecise (see Limitations).
 
 
 ## =============================================================================
-## SECTION 4  GSE81089: survival; Figures 6, 7 and 8
+## SECTION 4  GSE81089: survival; Figures 5, 6 and 7
 ## =============================================================================
 ## ---- 4.1: GSE81089 survival table ------------------------------------------
 v   <- readRDS("01_DESeq2/vsd_main.rds")
@@ -745,7 +1118,7 @@ geo <- readRDS("01_DESeq2/res_sym_main.rds")
 cd  <- as.data.frame(colData(v))
 table(cd$Condition)
 hub <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
-cmp <- hub                                         # Fig 6 shows the 4 hub genes only
+cmp <- hub                                         # Fig 5 shows the 4 hub genes only
 
 geo_ens <- if ("Ensembl" %in% names(geo)) geo$Ensembl else rownames(geo)
 pick_ens <- function(df, ens_ids, g) {
@@ -820,7 +1193,7 @@ write.csv(cox_geo, "05_survival/GSE81089_cox_results.csv", row.names = FALSE)
 
 lr <- data.frame()
 km_list <- list()
-for (g in hub) {
+for (g in plot_order) {
   d <- sv
   d$grp <- factor(ifelse(d[[g]] > median(d[[g]]), "High", "Low"), levels = c("Low", "High"))
   sdf <- survdiff(Surv(time_y, event) ~ grp, data = d)
@@ -833,9 +1206,10 @@ for (g in hub) {
     pval = paste0("Log-rank p = ", signif(p, 2)), pval.size = 4,
     palette = c("#0072B2", "#D55E00"), legend.labs = c("Low", "High"),
     legend.title = g, xlab = "Time (years)", ylab = "Overall survival probability",
-    title = paste0(g, " (n = ", nrow(d), ")"), break.time.by = 2,
+    title = paste0(panel_letter[[g]], "  ", g, " (n = ", nrow(d), ")"), break.time.by = 2,
     risk.table.height = 0.25, ggtheme = theme_bw())
 }
+lr <- lr[match(hub, lr$Gene), ]          # table order = hub order; figure order = plot_order
 print(lr)
 write.csv(lr, "05_survival/GSE81089_logrank.csv", row.names = FALSE)
 # CHECK: cox_geo has 8 rows. Univariable N = survival cohort (Part 1).
@@ -844,7 +1218,7 @@ write.csv(lr, "05_survival/GSE81089_logrank.csv", row.names = FALSE)
 #        report what you obtain.
 
 
-## ---- 4.3: Table 9 (GSE81089 rows) + Fig 7 ----------------------------------
+## ---- 4.3: Table 9 (GSE81089 rows) + Fig 6 ----------------------------------
 fmt_hr <- function(h, l, u) sprintf("%.2f (%.2f–%.2f)", h, l, u)
 fmt_p  <- function(p) ifelse(p < 0.001, "<0.001",
                              formatC(p, digits = 2, format = "g", flag = "#"))
@@ -853,26 +1227,26 @@ adj <- cox_geo[cox_geo$Model == "Adjusted", ]
 stopifnot(identical(uni$Gene, hub), identical(adj$Gene, hub), identical(lr$Gene, hub))
 t9g <- data.frame(
   Gene = hub, Cohort = "GSE81089",
-  `Patients / events` = paste(uni$N, "/", uni$Events),
+  `Patients / events (univariable; multivariable)` =
+    paste0(uni$N, " / ", uni$Events, "; ", adj$N, " / ", adj$Events),
   `Log-rank p (median split)` = formatC(lr$logrank_p, digits = 2, format = "g", flag = "#"),
   `Univariable HR (95% CI)` = fmt_hr(uni$HR, uni$LCL, uni$UCL),
   `Univariable p` = fmt_p(uni$p),
-  `Adjusted HR* (95% CI)` = fmt_hr(adj$HR, adj$LCL, adj$UCL),
-  `Adjusted p` = fmt_p(adj$p),
-  `Adjusted N / events` = paste(adj$N, "/", adj$Events),
-  `PH assumption (Schoenfeld p, gene term, adjusted model)` = formatC(adj$PH_p_gene, digits = 2, format = "f"),
+  `Multivariable HR (95% CI)` = fmt_hr(adj$HR, adj$LCL, adj$UCL),
+  `P value from the multivariable model` = fmt_p(adj$p),
+  `PH assumption (Schoenfeld p)` = formatC(adj$PH_p_gene, digits = 2, format = "f"),
   check.names = FALSE)
 print(t9g, right = FALSE)
 write.csv(t9g, "07_tables_for_manuscript/Table9_GSE81089_rows.csv", row.names = FALSE)
 
-pp <- arrange_ggsurvplots(unname(km_list), print = FALSE, ncol = 2, nrow = 2)
-ggsave("08_figures/Fig7_GSE81089_KM.png", pp, width = 12, height = 11, dpi = 300)
-ggsave("08_figures/Fig7_GSE81089_KM.pdf", pp, width = 12, height = 11)
-# CHECK: the Table 9 csv and Fig 7 should be written. For the PH column use the same model
+pp <- arrange_ggsurvplots(unname(km_list[grid_order]), print = FALSE, ncol = 2, nrow = 2)
+ggsave("08_figures/Fig6_GSE81089_KM.png", pp, width = 12, height = 11, dpi = 300)
+ggsave("08_figures/Fig6_GSE81089_KM.pdf", pp, width = 12, height = 11)
+# CHECK: the Table 9 csv and Fig 6 (panels A-D = plot_order) should be written. For the PH column use the same model
 #        as in the TCGA table (Section 3 also uses the adjusted model).
 
 
-## ---- 4.4: Fig 8, forest plot (GSE81089 + TCGA) -----------------------------
+## ---- 4.4: Fig 7, forest plot (GSE81089 + TCGA) -----------------------------
 stopifnot(file.exists("05_survival/TCGA_cox_results.csv"))
 cox_tcga <- read.csv("05_survival/TCGA_cox_results.csv")
 fo <- rbind(cbind(Cohort = "GSE81089", cox_geo[, c("Gene","Model","N","Events","HR","LCL","UCL","p")]),
@@ -888,13 +1262,14 @@ pf <- ggplot(fo, aes(HR, Gene, colour = Cohort)) +
   scale_colour_manual(values = c("GSE81089" = "#0072B2", "TCGA-LUAD" = "#D55E00")) +
   facet_wrap(~ Model) + theme_bw() +
   labs(x = "Hazard ratio per 1 SD increase in expression (95% CI)", y = NULL)
-ggsave("08_figures/Fig8_forest_Cox.png", pf, width = 10, height = 4, dpi = 300)
-ggsave("08_figures/Fig8_forest_Cox.pdf", pf, width = 10, height = 4)
+ggsave("08_figures/Fig7_forest_Cox.png", pf, width = 10, height = 4, dpi = 300)
+ggsave("08_figures/Fig7_forest_Cox.pdf", pf, width = 10, height = 4)
 # CHECK: the plot shows 4 genes, 2 panels (Univariable, Adjusted) and 2 colours (cohort).
+#        TCGA-LUAD: 504 patients (univariable) and 486 patients (adjusted).
 #        HR > 1 means high expression = shorter survival.
 
 
-## ---- 4.5: Fig 6, hub gene expression (GSE81089 + TCGA) ---------------------
+## ---- 4.5: Fig 5, hub gene expression (GSE81089 + TCGA) ---------------------
 vt   <- readRDS("04_TCGA/vsd_TCGA.rds")
 rst  <- readRDS("04_TCGA/res_sym_TCGA.rds")
 ens_tcga <- vapply(cmp, function(g) {
@@ -921,16 +1296,121 @@ make_box <- function(vobj, ens, res, ens_res, title) {
     theme_bw() + theme(legend.position = "none") +
     labs(title = title, x = NULL, y = "VST expression (log2 scale)")
 }
-pa <- make_box(v,  ens_geo,   geo, geo_ens, "GSE81089 (19 normal, 108 tumors)")
-pb <- make_box(vt, ens_tcga,  rst, NULL,    "TCGA-LUAD (59 normal, 517 tumors)")
+pa <- make_box(v,  ens_geo,   geo, geo_ens, "GSE81089 (19 normal, 108 tumours)")
+pb <- make_box(vt, ens_tcga,  rst, NULL,    "TCGA-LUAD (59 normal, 517 tumours)")
 p6 <- (pa / pb) + plot_annotation(tag_levels = "A")
-ggsave("08_figures/Fig6_hub_gene_expression.png", p6, width = 11, height = 8, dpi = 300)
-ggsave("08_figures/Fig6_hub_gene_expression.pdf", p6, width = 11, height = 8)
-# CHECK: 2 panels (A = GSE81089, B = TCGA), each with the 4 hub genes only (CDK1, CCNB1, CCNA2, BRCA1).
+ggsave("08_figures/Fig5_hub_gene_expression.png", p6, width = 11, height = 8, dpi = 300)
+ggsave("08_figures/Fig5_hub_gene_expression.pdf", p6, width = 11, height = 8)
+# CHECK: Fig 5: 2 panels (A = GSE81089, B = TCGA), each with the 4 hub genes only (CDK1, CCNB1, CCNA2, BRCA1).
 #        Each facet title shows the adjusted p-value (DESeq2). Compare with Table 8.
 #        The titles state 19/108 and 59/517; confirm with table(cd$Condition)
 #        in Part 1 that the counts are the same.
 
+
+## =============================================================================
+## SECTION 5  cytoHubba results: Fig. 4B (UpSet) and Fig. 4C (rank heatmap)
+## =============================================================================
+## ---- 5.1: top-20 lists from Suppl. Table S6 ----------------------------------
+# Input: metadata/Supplementary_Table_S6_cytoHubba.xlsx, sheet All_nodes (exported from
+# Cytoscape / cytoHubba; Rank_* = 1 is the highest score). MCC is not used (saturated).
+S6_FILE <- "metadata/Supplementary_Table_S6_cytoHubba.xlsx"
+stopifnot("S6 file not found in metadata/" = file.exists(S6_FILE))
+nodes <- as.data.frame(readxl::read_excel(S6_FILE, sheet = "All_nodes"))
+algos <- c(Degree = "Rank_Degree", MNC = "Rank_MNC", EPC = "Rank_EPC",
+           Radiality = "Rank_Radiality", Closeness = "Rank_Closeness")
+top20 <- lapply(algos, function(cn) nodes$Gene[nodes[[cn]] <= 20])
+shared <- Reduce(intersect, top20)
+cat("genes in the top 20 of all five algorithms:", shared, "\n")
+n_top <- rowSums(sapply(algos, function(cn) nodes[[cn]] <= 20))
+names(n_top) <- nodes$Gene
+at3 <- names(n_top)[n_top >= 3]
+cat("genes in the top 20 of at least three algorithms:", length(at3), "\n")
+ck5 <- data.frame(item = c("top-20 size per algorithm (min)", "genes shared by all five",
+                           "genes in >= 3 algorithms"),
+                  got = c(min(lengths(top20)), length(shared), length(at3)),
+                  verified = c(20, 4, 14))
+ck5$status <- ifelse(ck5$got == ck5$verified, "OK", "DIFFERENT")
+write.csv(ck5, "00_session/reference_check_cytoHubba.csv", row.names = FALSE)
+print(ck5, row.names = FALSE)
+# CHECK: all rows OK; shared = CDK1, CCNB1, CCNA2, BRCA1.
+
+## ---- 5.2: Fig. 4B UpSet plot -------------------------------------------------
+png("08_figures/Fig4B_UpSet_cytoHubba.png", width = 2400, height = 1600, res = 300)
+print(UpSetR::upset(UpSetR::fromList(top20), nsets = 5, order.by = "freq",
+                    sets.bar.color = "grey30", main.bar.color = "grey30",
+                    queries = list(list(query = UpSetR::intersects,
+                                        params = as.list(names(algos)),
+                                        color = "red", active = TRUE)),
+                    mb.ratio = c(0.65, 0.35), text.scale = 1.3))
+dev.off()
+
+## ---- 5.3: Fig. 4C heatmap of ranks (log10 colour scale) ------------------------
+hm <- as.matrix(nodes[match(at3, nodes$Gene), unname(algos)])
+rownames(hm) <- at3; colnames(hm) <- names(algos)
+# row order as in the manuscript: genes in the top 20 of most algorithms first, then lowest mean rank
+hm <- hm[order(-rowSums(hm <= 20), rowMeans(hm)), ]
+hd <- data.frame(Gene = factor(rep(rownames(hm), ncol(hm)), levels = rev(rownames(hm))),
+                 Algorithm = factor(rep(colnames(hm), each = nrow(hm)), levels = colnames(hm)),
+                 Rank = as.vector(hm))
+p4c <- ggplot(hd, aes(Algorithm, Gene, fill = log10(Rank))) + geom_tile(colour = "white") +
+  geom_text(aes(label = Rank), size = 3, family = FONT) +
+  scale_fill_gradient2(low = "#B2182B", mid = "#F7F7F7", high = "#4575B4", midpoint = 1,
+                       name = NULL) +
+  scale_y_discrete(position = "right") +
+  labs(x = NULL, y = NULL, title = "Rank of candidate genes by algorithm (1 = highest)") +
+  theme_minimal(base_size = 12, base_family = FONT) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        plot.title = element_text(face = "bold"), panel.grid = element_blank())
+ggsave("08_figures/Fig4C_rank_heatmap.png", p4c, width = 6.5, height = 7, dpi = 300)
+stopifnot("Fig4C was not written" = file.size("08_figures/Fig4C_rank_heatmap.png") > 1000)
+
+
+## =============================================================================
+## SECTION 6  Human Protein Atlas (immunohistochemistry): Suppl. Table S11 and Suppl. Fig. S5A
+## =============================================================================
+## ---- 6.1: counts from pathology.tsv (HPA version 23) ----------------------------
+# Input: metadata/pathology.tsv from https://www.proteinatlas.org/about/download
+# (file "pathology.tsv.zip"); columns: Gene, Gene name, Cancer, High, Medium, Low, Not detected.
+HPA_FILE <- "metadata/pathology.tsv"
+stopifnot("pathology.tsv not found in metadata/" = file.exists(HPA_FILE))
+hpa  <- read.delim(HPA_FILE, check.names = FALSE)
+hub6 <- c("CDK1", "CCNB1", "CCNA2", "BRCA1")
+h <- hpa[hpa$Cancer == "lung cancer" & hpa$`Gene name` %in% hub6, ]
+h <- h[match(hub6, h$`Gene name`), ]
+# Antibody IDs: shown on the HPA tissue pages of the example cores (not in pathology.tsv).
+ab <- c(CDK1 = "HPA003387", CCNB1 = "HPA061448", CCNA2 = "CAB000114", BRCA1 = "HPA034966")
+s11 <- data.frame(`Gene symbol` = h$`Gene name`, `Ensembl ID` = h$Gene,
+                  `Antibody (example core)` = ab[h$`Gene name`],
+                  High = h$High, Medium = h$Medium, Low = h$Low, `Not detected` = h$`Not detected`,
+                  check.names = FALSE)
+s11$`Patients scored (n)`    <- s11$High + s11$Medium + s11$Low + s11$`Not detected`
+s11$`Medium or high`         <- s11$High + s11$Medium
+s11$`Low or not detected`    <- s11$Low + s11$`Not detected`
+print(s11, row.names = FALSE)
+write.csv(s11, "07_tables_for_manuscript/Supplementary_Table_S11_HPA_lung_cancer_counts.csv", row.names = FALSE)
+ref11 <- list(CDK1 = c(2, 3, 5, 2), CCNB1 = c(1, 7, 4, 0), CCNA2 = c(2, 3, 5, 1), BRCA1 = c(1, 2, 3, 6))
+ck6 <- data.frame(gene = hub6, status = vapply(hub6, function(g)
+  if (isTRUE(all.equal(unlist(s11[s11$`Gene symbol` == g, c("High", "Medium", "Low", "Not detected")], use.names = FALSE),
+                       ref11[[g]]))) "OK" else "DIFFERENT", ""))
+write.csv(ck6, "00_session/reference_check_HPA.csv", row.names = FALSE)
+print(ck6, row.names = FALSE)
+# CHECK: all OK (High/Medium/Low/Not detected: CDK1 2/3/5/2, CCNB1 1/7/4/0,
+#        CCNA2 2/3/5/1, BRCA1 1/2/3/6; n = 12, 12, 11, 12).
+
+## ---- 6.2: Suppl. Fig. S5A, stacked bars ------------------------------------------
+lg <- do.call(rbind, lapply(seq_len(nrow(s11)), function(i)
+  data.frame(Gene = s11$`Gene symbol`[i], Level = c("High", "Medium", "Low", "Not detected"),
+             n = unlist(s11[i, c("High", "Medium", "Low", "Not detected")], use.names = FALSE))))
+lg$Gene  <- factor(lg$Gene, levels = hub6)
+lg$Level <- factor(lg$Level, levels = c("Not detected", "Low", "Medium", "High"))
+tot <- data.frame(Gene = factor(s11$`Gene symbol`, levels = hub6), n = s11$`Patients scored (n)`)
+pS5 <- ggplot(lg, aes(Gene, n, fill = Level)) + geom_col(colour = "white") +
+  geom_text(data = tot, aes(Gene, n, label = paste0("n=", n)), inherit.aes = FALSE, vjust = -0.4) +
+  scale_fill_manual(values = c(High = "#7B3A0E", Medium = "#C97F2B", Low = "#E8C79A", `Not detected` = "#D9D9D9"),
+                    breaks = c("High", "Medium", "Low", "Not detected")) +
+  labs(x = NULL, y = "Lung cancer samples (HPA)", fill = NULL) + theme_classic(base_size = 12)
+ggsave("08_figures/FigS5A_HPA_counts.png", pS5, width = 6, height = 4.5, dpi = 300)
+# The example tissue cores of Suppl. Fig. S5B-E are images from the HPA web pages (no code).
 
 
 ## ---- end: session information ------------------------------------------------
