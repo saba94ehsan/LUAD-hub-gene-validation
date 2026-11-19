@@ -1,0 +1,5 @@
+"Gene","Cohort","Patients / events (univariable; multivariable)","Log-rank p (median split)","Univariable HR (95% CI)","Univariable p","Multivariable HR (95% CI)","P value from the multivariable model","PH assumption (Schoenfeld p)"
+"CDK1","TCGA-LUAD","504 / 182; 486 / 177","8.7e-05","1.32 (1.14–1.52)","<0.001","1.33 (1.14–1.55)","<0.001","0.28"
+"CCNB1","TCGA-LUAD","504 / 182; 486 / 177","0.00031","1.39 (1.20–1.62)","<0.001","1.39 (1.18–1.63)","<0.001","0.40"
+"CCNA2","TCGA-LUAD","504 / 182; 486 / 177","8.1e-05","1.37 (1.19–1.58)","<0.001","1.39 (1.18–1.62)","<0.001","0.25"
+"BRCA1","TCGA-LUAD","504 / 182; 486 / 177","0.0093","1.22 (1.06–1.40)","0.0067","1.14 (0.98–1.32)","0.088","0.11"

@@ -1,0 +1,8 @@
+"Item","n"
+"Stage missing in the downloaded data object",120
+"Stage found in the GDC clinical table for these patients",112
+"Stage still missing after completion",8
+"Age missing (unchanged)",10
+"Patients with complete age, sex and stage after completion",486
+"Patients with stage in both sources",384
+"  of these, same stage group (I, II, III, IV) in both sources",382

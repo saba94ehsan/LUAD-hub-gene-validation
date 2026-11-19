@@ -1,0 +1,5 @@
+"Gene symbol","Ensembl ID","Antibody (example core)","High","Medium","Low","Not detected","Patients scored (n)","Medium or high","Low or not detected"
+"CDK1","ENSG00000170312","HPA003387",2,3,5,2,12,5,7
+"CCNB1","ENSG00000134057","HPA061448",1,7,4,0,12,8,4
+"CCNA2","ENSG00000145386","CAB000114",2,3,5,1,11,5,6
+"BRCA1","ENSG00000012048","HPA034966",1,2,3,6,12,3,9

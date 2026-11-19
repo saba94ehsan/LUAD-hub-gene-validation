@@ -1,0 +1,5 @@
+"Gene","Cohort","Patients / events (univariable; multivariable)","Log-rank p (median split)","Univariable HR (95% CI)","Univariable p","Multivariable HR (95% CI)","P value from the multivariable model","PH assumption (Schoenfeld p)"
+"CDK1","GSE81089","107 / 48; 107 / 48","0.081","1.30 (0.97–1.75)","0.082","1.25 (0.93–1.69)","0.14","0.60"
+"CCNB1","GSE81089","107 / 48; 107 / 48","0.25","1.41 (1.04–1.92)","0.029","1.25 (0.92–1.70)","0.15","0.67"
+"CCNA2","GSE81089","107 / 48; 107 / 48","0.057","1.26 (0.95–1.66)","0.10","1.22 (0.93–1.62)","0.16","0.43"
+"BRCA1","GSE81089","107 / 48; 107 / 48","0.28","1.24 (0.94–1.62)","0.13","1.21 (0.91–1.61)","0.20","0.55"

@@ -1,0 +1,8 @@
+"Characteristic","Value"
+"Tumor / normal samples with RNA-seq","517 / 59"
+"Patients in survival analysis / deaths","504 / 182"
+"Sex, female / male","272 / 232"
+"Median age, years (n missing)","66 (10)"
+"Stage I / II / III / IV (n missing)","270 / 120 / 81 / 25 (8)"
+"Median follow-up, years (reverse KM, 95% CI)","2.4 (2.2-2.7)"
+"Complete-case for adjusted model: patients / deaths","486 / 177"

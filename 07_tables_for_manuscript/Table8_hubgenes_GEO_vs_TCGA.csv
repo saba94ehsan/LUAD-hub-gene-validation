@@ -1,0 +1,7 @@
+"Gene","GEO_log2FC","GEO_padj","TCGA_log2FC","TCGA_padj","Same_direction","TCGA_Tumor_frac"
+"CDK1",1.81,5.5e-17,2.46,1.4e-55,TRUE,1
+"CCNB1",2.3,4.4e-27,2.99,5.3e-89,TRUE,1
+"CCNA2",2.04,3.6e-18,2.95,8.3e-72,TRUE,1
+"BRCA1",1.06,1.6e-07,1.44,1.3e-27,TRUE,1
+"GAPDH",1.31,1.6e-14,1.7,1.2e-49,TRUE,1
+"ALB",2.75,7.5e-06,5.27,4.4e-33,TRUE,0.49
