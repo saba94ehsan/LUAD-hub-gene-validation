@@ -1,0 +1,7 @@
+"item","got","verified","status"
+"TCGA survival cohort",504,504,"OK"
+"  deaths",182,182,"OK"
+"complete age+sex+stage (stage completed from GDC)",486,486,"OK"
+"  deaths",177,177,"OK"
+"complete age+sex+stage (data object only)",379,379,"OK"
+"  deaths",123,123,"OK"
